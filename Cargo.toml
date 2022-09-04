@@ -7,9 +7,12 @@ edition = "2021"
 
 [dependencies]
 md5 = "0.7.0"
-nix = "0.25.0"
-clap = "3.2.20"
+clap = { version = "3.2.20", features = ["derive"] }
 hex = "0.4"
+hex-literal = "0.3.4"
 log4rs = "1.1"
-pnet = "0.31.0"
 log = "0.4"
+bytes = "1"
+pnet = "0.29.0"
+toml = "0.4.2"
+serde = "*"
