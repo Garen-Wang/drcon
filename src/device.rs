@@ -17,8 +17,8 @@ pub struct Device {
 }
 
 impl Device {
-    pub fn new(config: AuthConfig) -> Self {
-        let iface = config.iface;
+    pub fn new(config: &AuthConfig) -> Self {
+        let iface = config.iface.clone();
         let channel = datalink::channel(&iface, Default::default())
             .expect("unable to establish network channel");
         let (tx, rx) = match channel {

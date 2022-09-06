@@ -5,11 +5,12 @@ mod eap;
 use clap::Parser;
 use log::debug;
 use pnet::datalink;
-use std::{fs, net::Ipv4Addr};
+use std::{fs, net::Ipv4Addr, sync::Arc, thread, time::Duration};
 
 use crate::{
     config::{AuthConfig, UserConfig},
     device::Device,
+    eap::{EAPContext, EAPStatus},
 };
 
 fn init_log4rs() {
@@ -61,7 +62,7 @@ fn main() {
         .next()
         .unwrap();
     debug!("mac: {}", iface.mac.unwrap());
-    debug!("available ips: {:?}", iface.ips);
+    // debug!("available ips: {:?}", iface.ips);
 
     let contents = fs::read_to_string("user-config.toml").unwrap();
     let user_config: UserConfig = toml::from_str(&contents).unwrap();
@@ -75,5 +76,27 @@ fn main() {
         iface,
         dns: "222.201.130.33".into(), // one of SCUT DNS
     };
-    let device = Device::new(auth_config);
+    let device = Arc::new(Device::new(&auth_config));
+    let eap_context = EAPContext::new(device, &auth_config);
+    eap_context.send_eapol_logoff().unwrap();
+    thread::sleep(Duration::from_secs(1));
+    eap_context.send_eapol_start().unwrap();
+    let request_identity = eap_context.receive_data_until();
+    let (id, remote_mac) = match request_identity {
+        EAPStatus::RequestIdentity { id, remote_mac } => (id, remote_mac),
+        _ => {
+            panic!("unexpected eap status: request identity expected");
+        }
+    };
+    debug!("id: {}, remote mac: {:?}", id, remote_mac);
+    thread::sleep(Duration::from_secs(1));
+    eap_context.send_response_identity(id, remote_mac).unwrap();
+    let request_md5_challenge = eap_context.receive_data_until();
+    let (id, md5_value) = match request_md5_challenge {
+        EAPStatus::RequestMD5Challenge { id, md5_value } => (id, md5_value),
+        _ => {
+            panic!("unexpected eap status: requeset md5 challenge expected");
+        }
+    };
+    debug!("id: {}, md5 value: {:?}", id, md5_value);
 }

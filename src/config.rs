@@ -3,7 +3,7 @@ use std::net::Ipv4Addr;
 use pnet::{datalink::NetworkInterface, util::MacAddr};
 use serde::Deserialize;
 
-#[derive(Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct UserConfig {
     pub username: String,
     pub password: String,
@@ -11,6 +11,7 @@ pub struct UserConfig {
     pub auth_ip: String,
 }
 
+#[derive(Debug, Clone)]
 pub struct AuthConfig {
     pub username: String,
     pub password: String,
