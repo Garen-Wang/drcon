@@ -19,6 +19,8 @@ use crate::{
 struct Args {
     #[clap(short, long, value_parser)]
     iface: String,
+    #[clap(short, long)]
+    logoff: bool,
 }
 
 fn main() {
@@ -50,7 +52,10 @@ fn main() {
     let eap_context = EAPContext::new(device, &auth_config);
 
     eap_context.send_eapol_logoff().unwrap();
-    thread::sleep(Duration::from_secs(1));
+    if args.logoff {
+        return;
+    }
+    thread::sleep(Duration::from_secs(3));
 
     eap_context.send_eapol_start().unwrap();
     let request_identity = eap_context.receive_data_until();
@@ -61,7 +66,7 @@ fn main() {
         }
     };
     info!("id: {}, remote mac: {:?}", id, remote_mac);
-    thread::sleep(Duration::from_secs(1));
+    thread::sleep(Duration::from_secs(2));
     eap_context.send_response_identity(id, remote_mac).unwrap();
     let request_md5_challenge = eap_context.receive_data_until();
     let (id, md5_value) = match request_md5_challenge {
@@ -71,7 +76,7 @@ fn main() {
         }
     };
     info!("id: {}, md5 value: {:?}", id, md5_value);
-    thread::sleep(Duration::from_secs(1));
+    thread::sleep(Duration::from_secs(2));
     eap_context
         .send_response_md5_challenge(id, remote_mac, md5_value)
         .unwrap();
@@ -81,18 +86,21 @@ fn main() {
         _ => false,
     };
     assert_eq!(a, true);
+    thread::sleep(Duration::from_secs(4));
+    let request_identity = eap_context.receive_data_until();
+    let (id, remote_mac) = match request_identity {
+        EAPStatus::RequestIdentity { id, remote_mac } => (id, remote_mac),
+        _ => {
+            panic!("unexpected eap status: request identity expected");
+        }
+    };
+    info!("id: {}, remote mac: {:?}", id, remote_mac);
+    thread::sleep(Duration::from_secs(1));
+    eap_context.send_response_identity(id, remote_mac).unwrap();
+    info!("response identity, nice!");
     loop {
-        let request_identity = eap_context.receive_data_until();
-        let (id, remote_mac) = match request_identity {
-            EAPStatus::RequestIdentity { id, remote_mac } => (id, remote_mac),
-            _ => {
-                panic!("unexpected eap status: request identity expected");
-            }
-        };
-        info!("id: {}, remote mac: {:?}", id, remote_mac);
-        thread::sleep(Duration::from_secs(1));
+        thread::sleep(Duration::from_secs(61));
         eap_context.send_response_identity(id, remote_mac).unwrap();
         info!("response identity, nice!");
-        thread::sleep(Duration::from_secs(61));
     }
 }
