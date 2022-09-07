@@ -151,7 +151,7 @@ impl Header for EAPCont {
             }
             _ => {
                 error!("unknown eap type: {}", eap_type);
-                return None;
+                None
             }
         }
     }
@@ -178,7 +178,7 @@ pub struct HeaderEAP {
     id: u8,
     len: u16,
     typ: u8,
-    cont: EAPCont,
+    cont: Option<EAPCont>,
 }
 impl Header for HeaderEAP {
     fn from_data(data: &[u8]) -> Option<Self> {
@@ -189,17 +189,13 @@ impl Header for HeaderEAP {
         let eap_len = u16::from_be_bytes(eap_len);
         let eap_type = data[22];
         let eap_cont = EAPCont::from_data(data);
-        if let Some(cont) = eap_cont {
-            Some(HeaderEAP {
-                code: eap_code,
-                id: eap_id,
-                len: eap_len,
-                typ: eap_type,
-                cont,
-            })
-        } else {
-            None
-        }
+        Some(HeaderEAP {
+            code: eap_code,
+            id: eap_id,
+            len: eap_len,
+            typ: eap_type,
+            cont: eap_cont,
+        })
     }
 
     fn write_to_data(&self, data: &mut BytesMut) {
@@ -207,7 +203,9 @@ impl Header for HeaderEAP {
         data.put_u8(self.id);
         data.put_u16(self.len);
         data.put_u8(self.typ);
-        self.cont.write_to_data(data);
+        if let Some(eap_cont) = &self.cont {
+            eap_cont.write_to_data(data);
+        }
     }
 }
 
@@ -234,6 +232,9 @@ impl EAPContext {
             typ: 2,
             len: 0,
         };
+
+        eth_header.write_to_data(&mut data);
+        _8021x_header.write_to_data(&mut data);
         let l = data.len();
         data.put_bytes(0, 96 - l);
 
@@ -261,8 +262,12 @@ impl EAPContext {
             typ: 1,
             len: 0,
         };
+
+        eth_header.write_to_data(&mut data);
+        _8021x_header.write_to_data(&mut data);
         let l = data.len();
         data.put_bytes(0, 96 - l);
+        debug!("eapol start data: {:#x}", data);
 
         // put_mac(&mut data, QUERY_MAC); // dest mac
         // put_mac(&mut data, self.device.mac); // src mac
@@ -299,8 +304,12 @@ impl EAPContext {
             id,
             len: eapol_len,
             typ: 1,
-            cont: EAPCont::Identity(eap_identity.to_vec()),
+            cont: Some(EAPCont::Identity(eap_identity.to_vec())),
         };
+
+        eth_header.write_to_data(&mut data);
+        _8021x_header.write_to_data(&mut data);
+        eap_header.write_to_data(&mut data);
         let l = data.len();
         data.put_bytes(0, 96 - l);
 
@@ -338,7 +347,7 @@ impl EAPContext {
         &self,
         id: u8,
         remote_mac: MacAddr,
-        md5_value: &[u8],
+        md5_value: Vec<u8>,
     ) -> io::Result<()> {
         let mut data = BytesMut::with_capacity(96);
         let eth_header = HeaderEth {
@@ -349,7 +358,7 @@ impl EAPContext {
         let mut plain_text = BytesMut::new();
         plain_text.put_u8(0x00); // eap.id (seems only 0x00)
         plain_text.put_slice(self.config.password.as_bytes());
-        plain_text.put_slice(md5_value);
+        plain_text.put_slice(&md5_value);
         let digest = md5::compute(plain_text);
         assert_eq!(digest.len(), 16);
 
@@ -371,47 +380,19 @@ impl EAPContext {
             id,
             len: eapol_len,
             typ: 4,
-            cont: EAPCont::MD5Challenge {
+            cont: Some(EAPCont::MD5Challenge {
                 value_size: digest.len() as u8,
                 md5_value: digest.to_vec(),
                 extra_data: md5_extra.to_vec(),
-            },
+            }),
         };
+
+        eth_header.write_to_data(&mut data);
+        _8021x_header.write_to_data(&mut data);
+        eap_header.write_to_data(&mut data);
         let l = data.len();
         data.put_bytes(0, 96 - l);
 
-        // put_mac(&mut data, remote_mac);
-        // put_mac(&mut data, self.device.mac);
-        // data.put_u16(0x88_8e); // eth type
-        // data.put_u8(0x01); // eapol ver
-        // data.put_u8(0x00); // eapol type
-
-        // let mut plain_text = BytesMut::new();
-        // plain_text.put_u8(0x00); // eap.id (seems only 0x00)
-        // plain_text.put_slice(self.config.password.as_bytes());
-        // plain_text.put_slice(md5_value);
-        // let digest = md5::compute(plain_text);
-
-        // let mut md5_extra = BytesMut::new();
-        // md5_extra.put_slice(self.config.username.as_bytes());
-        // let unknown_contents = hex!("00 44 61 00 00"); // TODO: what is the meaning?
-        // md5_extra.put_slice(&unknown_contents);
-        // md5_extra.put_slice(&self.config.auth_ip.octets());
-        // assert_eq!(md5_extra.len(), 21);
-
-        // let eapol_len: u16 = digest.len() as u16 + md5_extra.len() as u16 + 6;
-
-        // data.put_u16(eapol_len); // eapol.len
-        // data.put_u8(0x02); // response(2)
-        // data.put_u8(0x00); // id: 0
-        // data.put_u16(eapol_len); // eap.len
-        // data.put_u8(0x04); // type: md5
-        // data.put_u8(digest.len() as u8);
-        // data.put_slice(digest.as_slice());
-        // data.put(md5_extra);
-        // assert_eq!(data.len(), 61);
-        // data.put_bytes(0x00, 35);
-        // assert_eq!(data.len(), 96);
         self.device.send(data.to_vec())?;
         Ok(())
     }
@@ -419,15 +400,18 @@ impl EAPContext {
     pub fn receive_data(&self) -> Option<EAPStatus> {
         let data = match self.device.receive() {
             Ok(data) => data,
-            Err(_) => todo!(),
+            Err(_) => panic!("device receive error"),
         };
+        if data.len() != 64 && data.len() != 96 {
+            return None;
+        }
         let data = Bytes::copy_from_slice(&data);
         let eth_header = HeaderEth::from_data(&data)?;
         let _8021x_header = Header8021X::from_data(&data)?;
         let eap_header = HeaderEAP::from_data(&data)?;
         let eap_code = eap_header.code;
         let eap_type = eap_header.typ;
-        match eap_header.code {
+        match eap_code {
             3 => {
                 // success
                 Some(EAPStatus::Success)
@@ -444,7 +428,7 @@ impl EAPContext {
                     }
                     4 => {
                         // request md5 challenge
-                        if let EAPCont::MD5Challenge { md5_value, .. } = eap_header.cont {
+                        if let Some(EAPCont::MD5Challenge { md5_value, .. }) = eap_header.cont {
                             Some(EAPStatus::RequestMD5Challenge {
                                 id: eap_header.id,
                                 md5_value,
@@ -453,10 +437,19 @@ impl EAPContext {
                             None
                         }
                     }
-                    _ => todo!("unknown eap type: {}", eap_type),
+                    _ => {
+                        error!("unknown eap type: {}", eap_type);
+                        None
+                    }
                 }
             }
-            _ => todo!("unknown eap code: {}", eap_code),
+            4 => {
+                panic!("received eap code: failure");
+            }
+            _ => {
+                error!("unknown eap code: {}", eap_code);
+                None
+            }
         }
 
         // let dest_mac = &data[0..6];
@@ -516,145 +509,13 @@ impl EAPContext {
                 return eap_status;
             } else {
                 cnt += 1;
+                // debug!("cnt: {}", cnt);
             }
-            if cnt == 1000 {
-                panic!("cnt >= 1000");
+            if cnt == 500 {
+                panic!("cnt >= 500");
             }
         }
     }
-}
-
-fn send_eapol_logoff(config: AuthConfig) {
-    //
-    let data = BytesMut::with_capacity(96);
-    let dest_mac = QUERY_MAC;
-    let src_mac = config.mac;
-    let eth_type: u16 = 0x88_8e;
-    let eapol_ver: u8 = 0x01;
-    let eapol_type: u8 = 0x02; // 0x02: logoff
-    let eapol_len: u16 = 0x00_00;
-    let eth_padding_len = 42; // 59 - 18 + 1, all zero
-    let trailer_len = 32; // 91 - 60 + 1, all zero
-    let frame_check_seq: u32 = 0x00_00_00_00;
-    todo!("send");
-}
-
-fn send_eapol_start(config: AuthConfig) {
-    //
-    let data = BytesMut::with_capacity(96);
-    let dest_mac = QUERY_MAC;
-    let src_mac = config.mac;
-    let eth_type: u16 = 0x88_8e;
-    let eapol_ver: u8 = 0x01;
-    let eapol_type: u8 = 0x01; // TODO: 0x01 = ?
-    let eapol_len: u16 = 0x00_00;
-    let eth_padding_len = 42; // 59 - 18 + 1, all zero
-    let trailer_len = 32; // 91 - 60 + 1, all zero
-    let eth_checksum: u32 = 0x00_00_00_00;
-}
-
-fn send_request_identity(config: AuthConfig) {
-    let data = BytesMut::with_capacity(64);
-    let dest_mac = config.mac;
-    let src_mac = MacAddr(0x50, 0xda, 0x00, 0x91, 0xe5, 0xac); // TODO: where src_mac comes from?
-    let eth_type: u16 = 0x88_8e;
-    let eapol_ver: u8 = 0x01;
-    let eapol_type: u8 = 0x00; // TODO: 0x00 = ?
-    let eapol_len: u16 = 0x00_05;
-    let eap_code: u8 = 0x01; // code: Request(1)
-    let eap_id: u8 = 0x01; // id: 1
-    let eap_len: u16 = 0x00_05; // length: 5
-    let eap_type: u8 = 0x01; // type: identity(1)
-    let eth_padding_len = 37; // 59 - 23 + 1, all zero
-    let eth_checksum: u32 = 0x60_5c_4a_df; // TODO: variable?
-}
-
-fn send_response_identity(config: AuthConfig) {
-    let data = BytesMut::with_capacity(96);
-    let dest_mac = MacAddr(0x50, 0xda, 0x00, 0x91, 0xe5, 0xac); // TODO: where src_mac comes from?
-    let src_mac = config.mac;
-    let eth_type: u16 = 0x88_8e;
-    let eapol_ver: u8 = 0x01;
-    let eapol_type: u8 = 0x00;
-    let eapol_len: u16 = 0x00_1a; // 16 + 10 = 26
-    let eap_code: u8 = 0x02; // code: Response(2)
-    let eap_id: u8 = 0x01;
-    let eap_len: u16 = 0x00_1a; // similarly
-    let eap_type: u8 = 0x01; // type: identity(1)
-    let eap_identity =
-        hex::decode("32 30 32 30 33 30 34 33 30 31 38 39 00 44 61 00 00 6e 40 59 c9").unwrap();
-    let eap_padding_len = 16; // 59 - 44 + 1, all zero
-    let trailer_len = 32; // all zero
-    let eth_checksum: u32 = 0x00_00_00_00;
-}
-
-fn send_request_md5_challenge(config: AuthConfig) {
-    let data = BytesMut::with_capacity(64);
-    let dest_mac = config.mac;
-    let src_mac = MacAddr(0x50, 0xda, 0x00, 0x91, 0xe5, 0xac); // TODO: where src_mac comes from?
-    let eth_type: u16 = 0x88_8e;
-    let eapol_ver: u8 = 0x01;
-    let eapol_type: u8 = 0x00;
-    let eapol_len: u16 = 0x00_1a; // 16 + 10 = 26
-    let eap_code: u8 = 0x01; // code: request(1)
-    let eap_id: u8 = 0x00; // id: 0
-    let eap_len: u16 = 0x00_1a;
-    let eap_type: u8 = 0x04; // type: md5 challenge eap
-    let eap_md5_value_size: u8 = 0x10;
-    let eap_md5_value = hex::decode("99 07 61 7b ca 26 d2 83 ca 26 d2 83 00 00 00 00").unwrap();
-    let eap_md5_extra_data: u32 = 0x10_82_00_00;
-    let eap_padding_len = 16; // 59 - 44 + 1
-    let eth_checksum: u32 = 0x87_f8_24_ae;
-}
-
-fn send_response_md5_challenge(config: AuthConfig) {
-    //
-    let data = BytesMut::with_capacity(96);
-    let dest_mac = MacAddr(0x50, 0xda, 0x00, 0x91, 0xe5, 0xac); // TODO: where src_mac comes from?
-    let src_mac = config.mac;
-    let eth_type: u16 = 0x88_8e;
-    let eapol_ver: u8 = 0x01;
-    let eapol_type: u8 = 0x00;
-    let eapol_len: u16 = 0x00_2b; // 43
-    let eap_code: u8 = 0x02; // response(2)
-    let eap_id: u8 = 0x00;
-    let eap_len: u16 = 0x00_2b;
-    let eap_type: u8 = 0x04; // md5 challenge eap
-    let eap_md5_value_size: u8 = 0x10;
-    let eap_md5_value = hex::decode("17 01 25 2e 09 b2 30 d9 3d da 96 5c 64 72 0e 71").unwrap();
-    let eap_md5_extra_data =
-        hex::decode("32 30 32 30 33 30 34 33 30 31 38 39 00 44 61 2a 00 6e 40 59 c9").unwrap();
-    let trailer_len = 31; // 91 - 61 + 1, all zero
-    let checksum: u32 = 0x00_00_00_00;
-}
-
-fn send_success(config: AuthConfig) {
-    let data = BytesMut::with_capacity(64);
-    let dest_mac = config.mac;
-    let src_mac = MacAddr(0x50, 0xda, 0x00, 0x91, 0xe5, 0xac);
-    let eth_type: u16 = 0x88_8e;
-    let eapol_ver: u8 = 0x01;
-    let eapol_type: u8 = 0x00;
-    let eapol_len: u16 = 0x00_04;
-    let eap_code: u8 = 0x03; // code: success(3)
-    let eap_id: u8 = 0x00; // id: 0
-    let eap_len: u16 = 0x00_04;
-    let eth_padding_len = 38; // 59 - 22 + 1, all zero
-    let checksum: u32 = 0xec_c3_4d_2a;
-}
-
-fn send_to_data_channel(data: Vec<u8>, tx: Sender<Vec<u8>>) {
-    tx.send(data).expect("data channel not connected");
-    debug!("sent");
-}
-
-fn receive_from_data_channel(rx: Receiver<Vec<u8>>) {
-    let data = match rx.recv() {
-        Ok(data) => data,
-        Err(_) => todo!(),
-    };
-    todo!("really send data");
-    // really_send(data);
 }
 
 #[cfg(test)]

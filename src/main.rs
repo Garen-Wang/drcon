@@ -3,7 +3,7 @@ mod device;
 mod eap;
 
 use clap::Parser;
-use log::debug;
+use log::{debug, info};
 use pnet::datalink;
 use std::{fs, net::Ipv4Addr, sync::Arc, thread, time::Duration};
 
@@ -78,8 +78,10 @@ fn main() {
     };
     let device = Arc::new(Device::new(&auth_config));
     let eap_context = EAPContext::new(device, &auth_config);
+
     eap_context.send_eapol_logoff().unwrap();
     thread::sleep(Duration::from_secs(1));
+
     eap_context.send_eapol_start().unwrap();
     let request_identity = eap_context.receive_data_until();
     let (id, remote_mac) = match request_identity {
@@ -88,7 +90,7 @@ fn main() {
             panic!("unexpected eap status: request identity expected");
         }
     };
-    debug!("id: {}, remote mac: {:?}", id, remote_mac);
+    info!("id: {}, remote mac: {:?}", id, remote_mac);
     thread::sleep(Duration::from_secs(1));
     eap_context.send_response_identity(id, remote_mac).unwrap();
     let request_md5_challenge = eap_context.receive_data_until();
@@ -98,5 +100,29 @@ fn main() {
             panic!("unexpected eap status: requeset md5 challenge expected");
         }
     };
-    debug!("id: {}, md5 value: {:?}", id, md5_value);
+    info!("id: {}, md5 value: {:?}", id, md5_value);
+    thread::sleep(Duration::from_secs(1));
+    eap_context
+        .send_response_md5_challenge(id, remote_mac, md5_value)
+        .unwrap();
+    let success = eap_context.receive_data_until();
+    let a = match success {
+        EAPStatus::Success => true,
+        _ => false,
+    };
+    assert_eq!(a, true);
+    loop {
+        let request_identity = eap_context.receive_data_until();
+        let (id, remote_mac) = match request_identity {
+            EAPStatus::RequestIdentity { id, remote_mac } => (id, remote_mac),
+            _ => {
+                panic!("unexpected eap status: request identity expected");
+            }
+        };
+        info!("id: {}, remote mac: {:?}", id, remote_mac);
+        thread::sleep(Duration::from_secs(1));
+        eap_context.send_response_identity(id, remote_mac).unwrap();
+        info!("response identity, nice!");
+        thread::sleep(Duration::from_secs(61));
+    }
 }
