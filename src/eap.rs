@@ -1,11 +1,4 @@
-#![allow(unused)]
-use std::{
-    io, slice,
-    sync::{
-        mpsc::{self, Receiver, Sender},
-        Arc,
-    },
-};
+use std::{io, sync::Arc};
 
 use bytes::{BufMut, Bytes, BytesMut};
 use hex_literal::hex;
@@ -19,17 +12,13 @@ static QUERY_MAC: MacAddr = MacAddr(0x01, 0x80, 0xc2, 0x00, 0x00, 0x03);
 pub struct EAPContext {
     device: Arc<Device>,
     config: AuthConfig,
-    tx: Sender<Vec<u8>>,
-    rx: Receiver<Vec<u8>>,
 }
 
 pub enum EAPStatus {
     RequestIdentity { id: u8, remote_mac: MacAddr },
-    ResponseIdentity,
     RequestMD5Challenge { id: u8, md5_value: Vec<u8> },
-    ResponseMD5Challenge,
     Success,
-    Logoff,
+    Failure,
 }
 
 pub trait Header
@@ -211,12 +200,10 @@ impl Header for HeaderEAP {
 
 impl EAPContext {
     pub fn new(device: Arc<Device>, config: &AuthConfig) -> Self {
-        let (tx, rx) = mpsc::channel::<Vec<u8>>();
+        // let (tx, rx) = mpsc::channel::<Vec<u8>>();
         EAPContext {
             device,
             config: config.clone(),
-            tx,
-            rx,
         }
     }
 
@@ -443,9 +430,7 @@ impl EAPContext {
                     }
                 }
             }
-            4 => {
-                panic!("received eap code: failure");
-            }
+            4 => Some(EAPStatus::Failure),
             _ => {
                 error!("unknown eap code: {}", eap_code);
                 None
