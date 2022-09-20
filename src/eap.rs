@@ -502,29 +502,3 @@ impl EAPContext {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use std::fs;
-
-    use hex_literal::hex;
-
-    use crate::config::UserConfig;
-
-    use super::*;
-
-    #[test]
-    fn test_md5_challenge() {
-        let mut plain_text = BytesMut::new();
-        plain_text.put_u8(0x00);
-        let s = fs::read_to_string("user-config.toml").unwrap();
-        let user_config: UserConfig = toml::from_str(&s).unwrap();
-        plain_text.put_slice(user_config.password.as_bytes());
-        let md5_value = hex!("99 07 61 7b ca 26 d2 83 ca 26 d2 83 00 00 00 00");
-        plain_text.put_slice(&md5_value);
-
-        let digest = md5::compute(plain_text);
-        let cipher = hex!("17 01 25 2e 09 b2 30 d9 3d da 96 5c 64 72 0e 71");
-        assert_eq!(cipher, digest.as_slice());
-    }
-}
